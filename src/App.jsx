@@ -4,8 +4,10 @@ import DaySlot from './components/DaySlot'
 import RecipeModal from './components/RecipeModal'
 import SettingsPanel from './components/SettingsPanel'
 import AddRecipeModal from './components/AddRecipeModal'
+import WeekPlannerModal, { EMPTY_DAY_PLAN } from './components/WeekPlannerModal'
 import {
-  generateWeekPlan, fetchSingleEntree, fetchDifferentCuisine,
+  generateWeekPlan, generateWeekPlanWithPreferences,
+  fetchSingleEntree, fetchDifferentCuisine,
   fetchSameCuisineDifferent, fetchSwapProtein, fetchSideDish,
 } from './api/recipes'
 import { postSaved } from './api/client'
@@ -16,6 +18,21 @@ const LS_SPOON = 'meal-planner-spoon-key'
 const LS_OPTS = 'meal-planner-opts'
 const LS_WEEK = 'meal-planner-week-id'
 const LS_USER = 'meal-planner-user-id'
+const LS_PREFS = 'meal-planner-week-prefs'
+
+function emptyPrefs() {
+  return Array.from({ length: 7 }, () => ({ ...EMPTY_DAY_PLAN, tags: [] }))
+}
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(LS_PREFS)
+    if (!raw) return emptyPrefs()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed) || parsed.length !== 7) return emptyPrefs()
+    return parsed
+  } catch { return emptyPrefs() }
+}
 
 function loadOpts() {
   try { return JSON.parse(localStorage.getItem(LS_OPTS)) || {} } catch { return {} }
@@ -50,6 +67,8 @@ export default function App() {
   const [opts, setOpts] = useState(loadOpts)
   const [showAdd, setShowAdd] = useState(false)
   const [pendingUse, setPendingUse] = useState(null)
+  const [weekPrefs, setWeekPrefs] = useState(loadPrefs)
+  const [showPlanner, setShowPlanner] = useState(false)
 
   // Approval state: { [dayIndex]: string[] }
   const [approvals, setApprovals] = useState({})
@@ -84,7 +103,7 @@ export default function App() {
   }, [weekId, myUserId])
 
   // ---------- Week plan ----------
-  const planWeek = useCallback(async () => {
+  const planWeek = useCallback(async (prefsOverride) => {
     setLoadingAll(true)
     setMeals(Array(DAYS).fill(null))
     setSides(Array(DAYS).fill(null))
@@ -95,15 +114,30 @@ export default function App() {
     setWeekId(newWeekId)
     localStorage.setItem(LS_WEEK, newWeekId)
 
+    const activePrefs = prefsOverride || weekPrefs
+    const hasAnyPref = activePrefs.some(p => p.protein !== 'Any' || p.cuisine !== 'Any' || p.tags?.length > 0)
+
     try {
-      const entrees = await generateWeekPlan(spoonKey || null, opts)
+      let entrees
+      if (hasAnyPref) {
+        entrees = await generateWeekPlanWithPreferences(activePrefs, spoonKey || null)
+        // Fill any nulls (failed days) with random entrees
+        const fallbackIds = entrees.filter(Boolean).map(e => e.id)
+        entrees = await Promise.all(entrees.map(async (e) => {
+          if (e) return e
+          return fetchSingleEntree(spoonKey || null, fallbackIds)
+        }))
+      } else {
+        entrees = await generateWeekPlan(spoonKey || null, opts)
+      }
+
       const finalEntrees = pendingUse
-        ? [pendingUse, ...entrees.filter(e => e.id !== pendingUse.id).slice(0, 6)]
+        ? [pendingUse, ...entrees.filter(e => e?.id !== pendingUse.id).slice(0, 6)]
         : entrees
       setMeals(finalEntrees)
       setPendingUse(null)
 
-      const usedIds = new Set(finalEntrees.map(e => e.id))
+      const usedIds = new Set(finalEntrees.filter(Boolean).map(e => e.id))
       const sideResults = await Promise.allSettled(
         finalEntrees.map(e => fetchSideDish(e?.cuisine, usedIds))
       )
@@ -114,7 +148,7 @@ export default function App() {
     } finally {
       setLoadingAll(false)
     }
-  }, [spoonKey, opts, pendingUse])
+  }, [spoonKey, opts, pendingUse, weekPrefs])
 
   // ---------- Entree refresh ----------
   const handleRefresh = useCallback(async (dayIndex, type) => {
@@ -166,6 +200,19 @@ export default function App() {
     })
   }, [])
 
+  // ---------- Week preferences ----------
+  const handleBuildPlan = useCallback((prefs) => {
+    setWeekPrefs(prefs)
+    localStorage.setItem(LS_PREFS, JSON.stringify(prefs))
+    planWeek(prefs)
+  }, [planWeek])
+
+  const clearPrefs = useCallback(() => {
+    const empty = emptyPrefs()
+    setWeekPrefs(empty)
+    localStorage.removeItem(LS_PREFS)
+  }, [])
+
   // ---------- Add Recipe ----------
   const handleSaveRecipe = useCallback(async (recipe) => postSaved(recipe), [])
   const handleUseNow = useCallback((recipe) => {
@@ -177,6 +224,7 @@ export default function App() {
   const isLoadingSide = i => loadingAll || (loadingDay?.index === i && loadingDay?.slot === 'side')
   const uniqueIngredients = generated && !loadingAll ? countUniqueIngredients(meals) : null
   const totalApproved = Object.values(approvals).filter(a => a.length >= 2).length
+  const hasAnyPref = weekPrefs.some(p => p.protein !== 'Any' || p.cuisine !== 'Any' || p.tags?.length > 0)
 
   return (
     <div className="min-h-screen" style={{ background: '#0f0f0f' }}>
@@ -199,6 +247,9 @@ export default function App() {
           {opts.goodLeftovers && (
             <span className="px-2.5 py-1 rounded-full text-xs font-medium hidden sm:inline-flex" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>🍱 Good Leftovers</span>
           )}
+          {hasAnyPref && (
+            <span className="px-2.5 py-1 rounded-full text-xs font-medium hidden sm:inline-flex items-center gap-1.5 cursor-pointer" onClick={clearPrefs} title="Click to clear preferences" style={{ background: 'rgba(255,107,53,0.12)', color: '#ff6b35', border: '1px solid rgba(255,107,53,0.25)' }}>📋 Custom plan ✕</span>
+          )}
           {generated && totalApproved > 0 && (
             <span className="px-2.5 py-1 rounded-full text-xs font-medium hidden sm:inline-flex" style={{ background: 'rgba(22,163,74,0.12)', color: '#4ade80', border: '1px solid rgba(22,163,74,0.25)' }}>✓ {totalApproved}/7 agreed</span>
           )}
@@ -206,12 +257,21 @@ export default function App() {
 
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer hidden sm:flex"
             style={{ background: '#1a1a1a', color: '#aaa', border: '1px solid #2a2a2a' }}>
             + Add Recipe
           </button>
+          <button onClick={() => setShowPlanner(true)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer"
+            style={{
+              background: hasAnyPref ? 'rgba(255,107,53,0.12)' : '#1a1a1a',
+              color: hasAnyPref ? '#ff6b35' : '#aaa',
+              border: `1px solid ${hasAnyPref ? 'rgba(255,107,53,0.4)' : '#2a2a2a'}`,
+            }}>
+            {hasAnyPref ? '📋 Configured' : '📋 Configure'}
+          </button>
           <SettingsPanel spoonacularKey={spoonKey} onSave={saveKey} efficientShopping={!!opts.efficientShopping} goodLeftovers={!!opts.goodLeftovers} onToggle={toggleOpt} />
-          <button onClick={planWeek} disabled={loadingAll}
+          <button onClick={() => planWeek()} disabled={loadingAll}
             className="flex items-center gap-2 px-5 py-2 rounded-xl font-semibold text-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ background: '#ff6b35', color: '#fff' }}>
             {loadingAll
@@ -223,7 +283,7 @@ export default function App() {
 
       <main className="px-6 py-8 max-w-7xl mx-auto">
         {!generated && !loadingAll ? (
-          <HeroEmpty onPlan={planWeek} opts={opts} onToggle={toggleOpt} onAdd={() => setShowAdd(true)} />
+          <HeroEmpty onPlan={() => planWeek()} opts={opts} onToggle={toggleOpt} onAdd={() => setShowAdd(true)} onConfigure={() => setShowPlanner(true)} hasPrefs={hasAnyPref} />
         ) : (
           <>
             <div className="mb-6">
@@ -251,11 +311,18 @@ export default function App() {
 
       {selectedMeal && <RecipeModal meal={selectedMeal} onClose={() => setSelectedMeal(null)} />}
       {showAdd && <AddRecipeModal onClose={() => setShowAdd(false)} onSave={handleSaveRecipe} onUseNow={handleUseNow} />}
+      {showPlanner && (
+        <WeekPlannerModal
+          initial={weekPrefs}
+          onClose={() => setShowPlanner(false)}
+          onBuild={handleBuildPlan}
+        />
+      )}
     </div>
   )
 }
 
-function HeroEmpty({ onPlan, opts, onToggle, onAdd }) {
+function HeroEmpty({ onPlan, opts, onToggle, onAdd, onConfigure, hasPrefs }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center">
       <div className="text-6xl mb-6">🍳</div>
@@ -266,6 +333,7 @@ function HeroEmpty({ onPlan, opts, onToggle, onAdd }) {
       <div className="flex gap-3 mb-8">
         <HeroToggle label="Efficient Shopping" emoji="🛒" desc="Fewer unique ingredients" active={!!opts.efficientShopping} onToggle={() => onToggle('efficientShopping')} />
         <HeroToggle label="Good Leftovers" emoji="🍱" desc="Reheats well" active={!!opts.goodLeftovers} onToggle={() => onToggle('goodLeftovers')} />
+        <HeroToggle label="Configure Week" emoji="📋" desc="Set per-day preferences" active={hasPrefs} onToggle={onConfigure} />
       </div>
       <div className="flex gap-3">
         <button onClick={onPlan} className="px-8 py-4 rounded-2xl font-bold text-lg cursor-pointer"

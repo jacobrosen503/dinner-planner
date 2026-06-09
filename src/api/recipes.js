@@ -223,6 +223,145 @@ async function generatePool(size, spoonKey, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Tag filtering helpers
+// ---------------------------------------------------------------------------
+
+const ONE_POT_RE = /(one.?pot|slow.?cooker|instant.?pot|crockpot|crock.?pot|casserole|stew|soup|risotto|skillet|braised|braise)/i
+
+function passesTagFilters(meal, tags) {
+  if (!tags || tags.length === 0) return true
+  if (tags.includes('leftovers') && scoreLeftovers(meal) < 1) return false
+  if (tags.includes('quick') && meal.readyInMinutes && meal.readyInMinutes > 30) return false
+  if (tags.includes('onePot') && !ONE_POT_RE.test(meal.title + ' ' + (meal.category || ''))) return false
+  return true
+}
+
+async function pickFromListFiltered(list, excludeIds, tags, requireEntree = true) {
+  const available = shuffle(list.filter(m => !excludeIds.has(`mealdb-${m.idMeal}`)))
+  for (const item of available.slice(0, 20)) {
+    const meal = await mealDbLookup(item.idMeal)
+    if (!meal) continue
+    if (requireEntree && !isEntree(meal)) continue
+    if (!passesTagFilters(meal, tags)) continue
+    return meal
+  }
+  return null
+}
+
+// Map our protein labels to TheMealDB category names
+const PROTEIN_TO_MEALDB = { Beef: 'Beef', Chicken: 'Chicken', Pork: 'Pork', Lamb: 'Lamb', Seafood: 'Seafood', Vegetarian: 'Vegetarian', Vegan: 'Vegan' }
+
+// Fetch a single recipe matching a day's constraints (protein, cuisine, tags)
+export async function fetchMatchingRecipe(dayPlan, spoonKey = null, excludeIds = []) {
+  const { protein = 'Any', cuisine = 'Any', tags = [] } = dayPlan
+  const excluded = new Set(excludeIds)
+  const mealdbCategory = PROTEIN_TO_MEALDB[protein]
+  const wantHighProtein = tags.includes('highProtein')
+
+  // Spoonacular complex search: best when we have multiple constraints or need quick-time filtering
+  if (spoonKey && (cuisine !== 'Any' || protein !== 'Any' || tags.includes('quick'))) {
+    try {
+      const params = new URLSearchParams({ number: 10, apiKey: spoonKey, addRecipeInformation: true, type: 'main course' })
+      if (cuisine !== 'Any') params.set('cuisine', cuisine)
+      if (protein === 'Vegetarian') params.set('diet', 'vegetarian')
+      else if (protein === 'Vegan') params.set('diet', 'vegan')
+      else if (protein !== 'Any') params.set('includeIngredients', protein.toLowerCase())
+      if (tags.includes('quick')) params.set('maxReadyTime', '30')
+
+      const r = await fetch(`https://api.spoonacular.com/recipes/complexSearch?${params}`)
+      if (r.ok) {
+        const d = await r.json()
+        for (const c of shuffle(d.results || []).slice(0, 5)) {
+          if (excluded.has(`spoon-${c.id}`)) continue
+          const det = await fetch(`https://api.spoonacular.com/recipes/${c.id}/information?apiKey=${spoonKey}`)
+          if (!det.ok) continue
+          const meal = normalizeSpoonacular(await det.json())
+          if (!isEntree(meal)) continue
+          if (!passesTagFilters(meal, tags)) continue
+          return meal
+        }
+      }
+    } catch {}
+  }
+
+  // TheMealDB: try to match both cuisine + protein
+  if (cuisine !== 'Any' && mealdbCategory) {
+    try {
+      const list = await mealDbListByArea(cuisine)
+      for (const candidate of shuffle(list).slice(0, 25)) {
+        if (excluded.has(`mealdb-${candidate.idMeal}`)) continue
+        const meal = await mealDbLookup(candidate.idMeal)
+        if (!meal || !isEntree(meal)) continue
+        if (meal.category !== mealdbCategory) continue
+        if (!passesTagFilters(meal, tags)) continue
+        return meal
+      }
+      // Fall back: just match cuisine (protein not found in that area)
+      const m = await pickFromListFiltered(list, excluded, tags)
+      if (m) return m
+    } catch {}
+  } else if (cuisine !== 'Any') {
+    try {
+      const list = await mealDbListByArea(cuisine)
+      const m = await pickFromListFiltered(list, excluded, tags)
+      if (m) return m
+    } catch {}
+  } else if (mealdbCategory) {
+    const requireEntree = !['Vegetarian', 'Vegan'].includes(protein)
+    try {
+      const list = await mealDbListByCategory(mealdbCategory)
+      const m = await pickFromListFiltered(list, excluded, tags, requireEntree)
+      if (m) return m
+    } catch {}
+  }
+
+  // High protein tag with no protein specified: bias toward meat
+  if (wantHighProtein && protein === 'Any') {
+    for (const cat of shuffle(['Beef', 'Chicken', 'Pork', 'Lamb', 'Seafood']).slice(0, 3)) {
+      try {
+        const list = await mealDbListByCategory(cat)
+        const m = await pickFromListFiltered(list, excluded, [])
+        if (m) return m
+      } catch {}
+    }
+  }
+
+  return fetchSingleEntree(spoonKey, [...excludeIds])
+}
+
+// Generate a week plan where each day follows its own constraints
+export async function generateWeekPlanWithPreferences(dayPlans, spoonKey = null) {
+  const excludeIds = []
+  const results = []
+
+  for (const dayPlan of dayPlans) {
+    const hasConstraint = dayPlan.protein !== 'Any' || dayPlan.cuisine !== 'Any' || (dayPlan.tags?.length > 0)
+    let meal = null
+
+    try {
+      if (hasConstraint) {
+        meal = await fetchMatchingRecipe(dayPlan, spoonKey, excludeIds)
+      } else {
+        meal = await fetchSingleEntree(spoonKey, excludeIds)
+      }
+    } catch {}
+
+    if (!meal) {
+      // last resort: random
+      for (let i = 0; i < 5; i++) {
+        const m = await mealDbRandom()
+        if (m && isEntree(m) && !excludeIds.includes(m.id)) { meal = m; break }
+      }
+    }
+
+    if (meal) excludeIds.push(meal.id)
+    results.push(meal || null)
+  }
+
+  return results
+}
+
+// ---------------------------------------------------------------------------
 // Public: week plan
 // ---------------------------------------------------------------------------
 
