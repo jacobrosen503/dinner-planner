@@ -85,15 +85,21 @@ export default function AddRecipeModal({ onClose, onSave, onUseNow }) {
 
   const handleIgUrl = async () => {
     if (!igUrl.trim()) return
-    // Try standard scrape first (works for some IG pages when logged out)
     setScraping(true); setError('')
     try {
       const recipe = await scrapeUrl(igUrl.trim())
       populateFromRecipe(recipe)
     } catch {
-      // Instagram almost always blocks — guide to screenshot
-      setError('Instagram requires login for direct access. Please screenshot the recipe from the caption and upload it instead.')
-      setIgMode('screenshot')
+      // Instagram blocks unauthenticated access — save the link as a stub recipe
+      const stub = {
+        id: `ig-link-${Date.now()}`,
+        source: 'Instagram',
+        title: 'Instagram Reel',
+        sourceUrl: igUrl.trim(),
+        image: null, cuisine: '', category: '', instructions: '',
+        ingredients: [], tags: [],
+      }
+      populateFromRecipe(stub)
     } finally {
       setScraping(false)
     }
