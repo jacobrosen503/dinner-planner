@@ -1,6 +1,7 @@
 import { scoreLeftovers } from '../utils/tags'
 import { pickEfficientWeek } from '../utils/shopping'
 import { isEntree } from '../utils/entree'
+import { fetchAIRecipe } from './client'
 
 const MEALDB = 'https://www.themealdb.com/api/json/v1/1'
 
@@ -170,14 +171,41 @@ async function spoonByCuisine(key, cuisine) {
 export const ALL_AREAS = [
   'American', 'British', 'Canadian', 'Chinese', 'Croatian', 'Dutch',
   'Egyptian', 'Filipino', 'French', 'Greek', 'Indian', 'Irish',
-  'Italian', 'Jamaican', 'Japanese', 'Kenyan', 'Malaysian', 'Mexican',
+  'Italian', 'Jamaican', 'Japanese', 'Kenyan', 'Korean', 'Malaysian', 'Mexican',
   'Moroccan', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Thai',
   'Tunisian', 'Turkish', 'Ukrainian', 'Vietnamese',
 ]
 
+// Cuisines with no or very few TheMealDB recipes — route to AI generation
+const AI_CUISINES = new Set(['Korean', 'Filipino', 'Kenyan', 'Tunisian', 'Croatian'])
+
 const ENTREE_CATEGORIES = [
   'Beef', 'Chicken', 'Lamb', 'Pasta', 'Pork', 'Seafood', 'Miscellaneous',
 ]
+
+// Map our UI protein labels to TheMealDB category names
+const PROTEIN_TO_MEALDB = {
+  Beef: 'Beef', Chicken: 'Chicken', Pork: 'Pork', Lamb: 'Lamb',
+  // Seafood subtypes all come from the Seafood category; keyword filter applied post-lookup
+  Fish: 'Seafood', Shrimp: 'Seafood', Shellfish: 'Seafood',
+  Tofu: 'Vegetarian',
+  Vegetarian: 'Vegetarian', Vegan: 'Vegan',
+}
+
+// Keyword patterns for specific seafood subtypes
+const SEAFOOD_KW = {
+  Fish: /\b(fish|salmon|tuna|cod|halibut|tilapia|bass|snapper|trout|sole|flounder|swordfish|mahi|grouper|catfish|haddock|anchov|sardine|herring|mackerel|pollock|whiting|pike|perch|walleye)\b/i,
+  Shrimp: /\b(shrimp|prawn)\b/i,
+  Shellfish: /\b(crab|lobster|clam|mussel|oyster|scallop|squid|octopus|calamari|crayfish|abalone)\b/i,
+  Tofu: /\b(tofu|bean curd)\b/i,
+}
+
+function mealMatchesProtein(meal, protein) {
+  const re = SEAFOOD_KW[protein]
+  if (!re) return true
+  const text = [meal.title, ...(meal.ingredients || []).map(i => i.name)].join(' ')
+  return re.test(text)
+}
 
 // ---------------------------------------------------------------------------
 // Pool generation (entrees only)
@@ -248,18 +276,17 @@ async function pickFromListFiltered(list, excludeIds, tags, requireEntree = true
   return null
 }
 
-// Map our protein labels to TheMealDB category names
-const PROTEIN_TO_MEALDB = { Beef: 'Beef', Chicken: 'Chicken', Pork: 'Pork', Lamb: 'Lamb', Seafood: 'Seafood', Vegetarian: 'Vegetarian', Vegan: 'Vegan' }
-
 // Fetch a single recipe matching a day's constraints (protein, cuisine, tags)
 export async function fetchMatchingRecipe(dayPlan, spoonKey = null, excludeIds = []) {
   const { protein = 'Any', cuisine = 'Any', tags = [] } = dayPlan
   const excluded = new Set(excludeIds)
   const mealdbCategory = PROTEIN_TO_MEALDB[protein]
   const wantHighProtein = tags.includes('highProtein')
+  const isSeafoodSubtype = ['Fish', 'Shrimp', 'Shellfish', 'Tofu'].includes(protein)
+  const cuisineIsAI = AI_CUISINES.has(cuisine)
 
-  // Spoonacular complex search: best when we have multiple constraints or need quick-time filtering
-  if (spoonKey && (cuisine !== 'Any' || protein !== 'Any' || tags.includes('quick'))) {
+  // Spoonacular complex search: best for multi-filter or quick-time constraints
+  if (spoonKey && !cuisineIsAI && (cuisine !== 'Any' || protein !== 'Any' || tags.includes('quick'))) {
     try {
       const params = new URLSearchParams({ number: 10, apiKey: spoonKey, addRecipeInformation: true, type: 'main course' })
       if (cuisine !== 'Any') params.set('cuisine', cuisine)
@@ -284,39 +311,59 @@ export async function fetchMatchingRecipe(dayPlan, spoonKey = null, excludeIds =
     } catch {}
   }
 
-  // TheMealDB: try to match both cuisine + protein
-  if (cuisine !== 'Any' && mealdbCategory) {
-    try {
-      const list = await mealDbListByArea(cuisine)
-      for (const candidate of shuffle(list).slice(0, 25)) {
-        if (excluded.has(`mealdb-${candidate.idMeal}`)) continue
-        const meal = await mealDbLookup(candidate.idMeal)
-        if (!meal || !isEntree(meal)) continue
-        if (meal.category !== mealdbCategory) continue
-        if (!passesTagFilters(meal, tags)) continue
-        return meal
-      }
-      // Fall back: just match cuisine (protein not found in that area)
-      const m = await pickFromListFiltered(list, excluded, tags)
-      if (m) return m
-    } catch {}
-  } else if (cuisine !== 'Any') {
-    try {
-      const list = await mealDbListByArea(cuisine)
-      const m = await pickFromListFiltered(list, excluded, tags)
-      if (m) return m
-    } catch {}
-  } else if (mealdbCategory) {
-    const requireEntree = !['Vegetarian', 'Vegan'].includes(protein)
-    try {
-      const list = await mealDbListByCategory(mealdbCategory)
-      const m = await pickFromListFiltered(list, excluded, tags, requireEntree)
-      if (m) return m
-    } catch {}
+  // Skip TheMealDB for AI-sparse cuisines, go straight to AI
+  if (!cuisineIsAI) {
+    // TheMealDB: try to match both cuisine + protein
+    if (cuisine !== 'Any' && mealdbCategory) {
+      try {
+        const list = await mealDbListByArea(cuisine)
+        if (list.length > 0) {
+          for (const candidate of shuffle(list).slice(0, 25)) {
+            if (excluded.has(`mealdb-${candidate.idMeal}`)) continue
+            const meal = await mealDbLookup(candidate.idMeal)
+            if (!meal || !isEntree(meal)) continue
+            if (meal.category !== mealdbCategory) continue
+            if (isSeafoodSubtype && !mealMatchesProtein(meal, protein)) continue
+            if (!passesTagFilters(meal, tags)) continue
+            return meal
+          }
+          // Fall back: just match cuisine (protein not found in that area)
+          const m = await pickFromListFiltered(list, excluded, tags)
+          if (m) return m
+        }
+      } catch {}
+    } else if (cuisine !== 'Any') {
+      try {
+        const list = await mealDbListByArea(cuisine)
+        if (list.length > 0) {
+          const m = await pickFromListFiltered(list, excluded, tags)
+          if (m) return m
+        }
+      } catch {}
+    } else if (mealdbCategory) {
+      const requireEntree = !['Vegetarian', 'Vegan'].includes(protein)
+      try {
+        // For seafood subtypes and tofu, fetch from Seafood/Vegetarian category and keyword-filter
+        const list = await mealDbListByCategory(mealdbCategory)
+        if (isSeafoodSubtype) {
+          for (const candidate of shuffle(list).slice(0, 30)) {
+            if (excluded.has(`mealdb-${candidate.idMeal}`)) continue
+            const meal = await mealDbLookup(candidate.idMeal)
+            if (!meal || !isEntree(meal)) continue
+            if (!mealMatchesProtein(meal, protein)) continue
+            if (!passesTagFilters(meal, tags)) continue
+            return meal
+          }
+        } else {
+          const m = await pickFromListFiltered(list, excluded, tags, requireEntree)
+          if (m) return m
+        }
+      } catch {}
+    }
   }
 
-  // High protein tag with no protein specified: bias toward meat
-  if (wantHighProtein && protein === 'Any') {
+  // High protein tag with no protein specified: bias toward meat categories
+  if (wantHighProtein && protein === 'Any' && !cuisineIsAI) {
     for (const cat of shuffle(['Beef', 'Chicken', 'Pork', 'Lamb', 'Seafood']).slice(0, 3)) {
       try {
         const list = await mealDbListByCategory(cat)
@@ -324,6 +371,14 @@ export async function fetchMatchingRecipe(dayPlan, spoonKey = null, excludeIds =
         if (m) return m
       } catch {}
     }
+  }
+
+  // AI fallback: use when cuisine has no TheMealDB data or no results found
+  if (cuisine !== 'Any') {
+    try {
+      const meal = await fetchAIRecipe({ cuisine, protein: protein !== 'Any' ? protein : undefined, tags })
+      if (meal) return meal
+    } catch {}
   }
 
   return fetchSingleEntree(spoonKey, [...excludeIds])

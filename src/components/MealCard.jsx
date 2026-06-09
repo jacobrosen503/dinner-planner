@@ -52,6 +52,16 @@ export default function MealCard({ dayIndex, meal, loading, onRefresh, onView })
             {meal.cuisine}
           </span>
         )}
+
+        {/* AI badge */}
+        {!loading && meal?.aiGenerated && (
+          <span
+            className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-xs font-semibold"
+            style={{ background: 'rgba(167,139,250,0.85)', color: '#fff', backdropFilter: 'blur(6px)' }}
+          >
+            ✨ AI
+          </span>
+        )}
       </div>
 
       {/* Body */}

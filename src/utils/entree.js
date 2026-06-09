@@ -1,8 +1,9 @@
 // Classify a recipe as entree vs side dish for the purpose of the main dinner slot.
 
-// TheMealDB categories that are always entrees
+// TheMealDB categories that are always entrees (includes AI-generated category names)
 const ALWAYS_ENTREE = new Set([
   'Beef', 'Chicken', 'Lamb', 'Pork', 'Seafood', 'Goat', 'Pasta',
+  'Fish', 'Shrimp', 'Shellfish', 'Tofu',
 ])
 
 // Categories never used in the main entree slot

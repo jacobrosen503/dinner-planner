@@ -35,3 +35,14 @@ export async function postSaved(recipe) {
 export async function deleteSaved(id) {
   await fetch(`${BASE}/saved/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
+
+export async function fetchAIRecipe({ cuisine, protein, tags = [] }) {
+  const r = await fetch(`${BASE}/ai/recipe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cuisine, protein, tags }),
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.error || 'AI recipe generation failed')
+  return d
+}

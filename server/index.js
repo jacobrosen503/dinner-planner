@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url'
 import { scrapeRecipe, scrapeRandomFromSites } from './scraper.js'
 import { listSaved, saveRecipe, deleteRecipe, getApprovals, toggleApproval } from './store.js'
 import { extractRecipeFromImage } from './vision.js'
+import { generateAIRecipe } from './ai-recipes.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const IS_PROD = process.env.NODE_ENV === 'production'
@@ -61,6 +62,22 @@ app.post('/api/vision/recipe', async (req, res) => {
     res.json(recipe)
   } catch (e) {
     res.status(422).json({ error: e.message })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// AI recipe generation (for sparse/unsupported cuisines like Korean)
+// ---------------------------------------------------------------------------
+
+app.post('/api/ai/recipe', async (req, res) => {
+  const { cuisine, protein, tags } = req.body
+  if (!cuisine) return res.status(400).json({ error: 'cuisine required' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  try {
+    const recipe = await generateAIRecipe({ cuisine, protein, tags })
+    res.json(recipe)
+  } catch (e) {
+    res.status(503).json({ error: e.message })
   }
 })
 

@@ -3,7 +3,7 @@ import { ALL_AREAS } from '../api/recipes'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
-const PROTEINS = ['Any', 'Beef', 'Chicken', 'Pork', 'Lamb', 'Seafood', 'Vegetarian', 'Vegan']
+const PROTEINS = ['Any', 'Beef', 'Chicken', 'Pork', 'Lamb', 'Fish', 'Shrimp', 'Shellfish', 'Tofu', 'Vegetarian', 'Vegan']
 
 const CUISINES = ['Any', ...ALL_AREAS.sort()]
 
