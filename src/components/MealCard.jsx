@@ -1,7 +1,12 @@
+import { computeTags } from '../utils/tags'
+import RefreshMenu from './RefreshMenu'
+import MacroPanel from './MacroPanel'
+
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
-export default function MealCard({ dayIndex, meal, loading, onSwap, onView }) {
+export default function MealCard({ dayIndex, meal, loading, onRefresh, onView }) {
   const day = DAYS[dayIndex]
+  const tags = meal && !loading ? computeTags(meal) : []
 
   return (
     <div
@@ -14,14 +19,14 @@ export default function MealCard({ dayIndex, meal, loading, onSwap, onView }) {
           {day}
         </span>
         {meal && !loading && (
-          <span className="text-xs" style={{ color: '#555' }}>
+          <span className="text-xs" style={{ color: '#444' }}>
             {meal.source}
           </span>
         )}
       </div>
 
-      {/* Image area */}
-      <div className="relative overflow-hidden" style={{ height: 180 }}>
+      {/* Image */}
+      <div className="relative overflow-hidden" style={{ height: 176 }}>
         {loading ? (
           <div className="w-full h-full flex items-center justify-center" style={{ background: '#222' }}>
             <LoadingSpinner />
@@ -38,44 +43,50 @@ export default function MealCard({ dayIndex, meal, loading, onSwap, onView }) {
           </div>
         )}
 
-        {/* Cuisine badge */}
+        {/* Cuisine pill */}
         {!loading && meal?.cuisine && (
           <span
-            className="absolute top-2 left-2 px-2 py-1 rounded-lg text-xs font-medium"
-            style={{ background: 'rgba(0,0,0,0.75)', color: '#fff', backdropFilter: 'blur(4px)' }}
+            className="absolute top-2 left-2 px-2.5 py-1 rounded-lg text-xs font-semibold"
+            style={{ background: 'rgba(0,0,0,0.8)', color: '#fff', backdropFilter: 'blur(6px)' }}
           >
             {meal.cuisine}
           </span>
         )}
       </div>
 
-      {/* Content */}
+      {/* Body */}
       <div className="p-4 flex flex-col flex-1">
         {loading ? (
           <div className="flex-1 space-y-2">
             <div className="h-5 rounded-lg animate-pulse" style={{ background: '#2a2a2a', width: '80%' }} />
-            <div className="h-4 rounded-lg animate-pulse" style={{ background: '#2a2a2a', width: '50%' }} />
+            <div className="h-4 rounded-lg animate-pulse" style={{ background: '#2a2a2a', width: '55%' }} />
+            <div className="flex gap-1 mt-3">
+              {[60, 80, 50].map(w => (
+                <div key={w} className="h-5 rounded animate-pulse" style={{ background: '#2a2a2a', width: w }} />
+              ))}
+            </div>
           </div>
         ) : meal ? (
           <>
-            <h3 className="font-semibold text-white leading-tight mb-2 line-clamp-2" style={{ fontSize: 15 }}>
+            <h3 className="font-semibold text-white leading-snug mb-3 line-clamp-2" style={{ fontSize: 15 }}>
               {meal.title}
             </h3>
-            <div className="flex flex-wrap gap-1 mb-3">
+
+            {/* Tags row */}
+            <div className="flex flex-wrap gap-1.5 mb-4">
               {meal.category && (
-                <span className="px-2 py-0.5 rounded text-xs" style={{ background: '#2a2a2a', color: '#999' }}>
-                  {meal.category}
-                </span>
+                <Tag label={meal.category} color="#2a2a2a" textColor="#888" />
               )}
               {meal.readyInMinutes && (
-                <span className="px-2 py-0.5 rounded text-xs" style={{ background: '#2a2a2a', color: '#999' }}>
-                  ⏱ {meal.readyInMinutes}m
-                </span>
+                <Tag label={`⏱ ${meal.readyInMinutes}m`} color="#2a2a2a" textColor="#888" />
               )}
-              {meal.tags?.slice(0, 2).map(tag => (
-                <span key={tag} className="px-2 py-0.5 rounded text-xs" style={{ background: '#2a2a2a', color: '#999' }}>
-                  {tag}
-                </span>
+              {tags.map(tag => (
+                <Tag
+                  key={tag.label}
+                  label={`${tag.icon} ${tag.label}`}
+                  color={`${tag.color}22`}
+                  textColor={tag.color}
+                />
               ))}
             </div>
           </>
@@ -83,35 +94,44 @@ export default function MealCard({ dayIndex, meal, loading, onSwap, onView }) {
           <p className="text-sm" style={{ color: '#555' }}>No meal planned</p>
         )}
 
-        {/* Actions */}
-        <div className="flex gap-2 mt-auto pt-2">
+        {/* Action row */}
+        <div className="flex items-center gap-2 mt-auto pt-1">
           <button
             onClick={() => meal && onView(meal)}
             disabled={loading || !meal}
-            className="flex-1 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             style={{ background: '#ff6b35', color: '#fff' }}
           >
             View Recipe
           </button>
-          <button
-            onClick={() => onSwap(dayIndex)}
-            disabled={loading}
-            className="px-3 py-2 rounded-xl text-sm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{ background: '#2a2a2a', color: '#aaa' }}
-            title="Get different meal"
-          >
-            ↻
-          </button>
+
+          <MacroPanel meal={!loading ? meal : null} />
+
+          <RefreshMenu
+            disabled={loading || !meal}
+            onSelect={(type) => onRefresh(dayIndex, type)}
+          />
         </div>
       </div>
     </div>
   )
 }
 
+function Tag({ label, color, textColor }) {
+  return (
+    <span
+      className="px-2 py-0.5 rounded-md text-xs font-medium"
+      style={{ background: color, color: textColor }}
+    >
+      {label}
+    </span>
+  )
+}
+
 function LoadingSpinner() {
   return (
     <div
-      className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
+      className="w-8 h-8 rounded-full border-2 animate-spin"
       style={{ borderColor: '#ff6b35', borderTopColor: 'transparent' }}
     />
   )
