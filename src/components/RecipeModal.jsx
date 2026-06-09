@@ -14,7 +14,16 @@ export default function RecipeModal({ meal, onClose }) {
   if (!meal) return null
 
   const steps = meal.instructions
-    ? meal.instructions.split(/\r?\n+/).filter(s => s.trim())
+    ? meal.instructions
+        .split(/\r?\n+/)
+        .map(s => s.trim())
+        .filter(s =>
+          s.length > 0 &&
+          // Drop bare "step N" / "STEP N:" labels — we number steps ourselves
+          !/^step\s*\d+[.:)]*$/i.test(s) &&
+          // Drop lone numbers like "1." or "(2)"
+          !/^\(?\d+[.)]\)?$/.test(s)
+        )
     : []
 
   return (
